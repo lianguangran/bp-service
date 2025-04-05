@@ -41,7 +41,7 @@ async fn edit_member(
 #[delete("/<member_id>")]
 async fn delete_member(conn: BpRecordConn, user_id: Uid, member_id: Uid) -> Result<(), ApiError> {
     let user_member = Members::check_user(&conn, user_id.into(), member_id.into()).await?;
-    Members::delete(&conn, user_member.member_id).await?;
+    Members::delete(&conn, user_member.user_id, user_member.member_id).await?;
     Ok(())
 }
 

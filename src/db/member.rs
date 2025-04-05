@@ -8,6 +8,7 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use diesel::{Queryable, Selectable};
 use serde::{Deserialize, Serialize};
+use std::result::Result::Ok;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Identifiable, Queryable, Selectable, Associations)]
@@ -21,7 +22,6 @@ use uuid::Uuid;
 pub struct UserMember {
     pub user_id: Uuid,
     pub member_id: Uuid,
-    pub is_default: bool,
     #[serde(with = "serde_time_format")]
     pub created_at: NaiveDateTime,
     #[serde(with = "serde_time_format")]
@@ -112,7 +112,6 @@ impl Members {
                             members::name.eq(new_member.name),
                             members::memo.eq(new_member.memo),
                         ))
-                        .returning(Members::as_returning())
                         .get_result::<Members>(x)
                         .map_err(|e| ApiError::Internal(Error::from(e)));
                     match member {
@@ -147,16 +146,40 @@ impl Members {
                         members::memo.eq(new_member.memo),
                         members::updated_at.eq(diesel::dsl::now),
                     ))
-                    .returning(Members::as_returning())
                     .get_result::<Members>(c)
             })
             .await?;
         Ok(member)
     }
 
-    pub async fn delete(conn: &BpRecordConn, member_id: Uuid) -> Result<usize, ApiError> {
+    pub async fn delete(
+        conn: &BpRecordConn,
+        user_id: Uuid,
+        member_id: Uuid,
+    ) -> Result<usize, ApiError> {
         let result = conn
-            .run(move |c| diesel::delete(members::table.find(member_id)).execute(c))
+            .run(move |c| {
+                let user_member = user_member::table
+                    .find((user_id, member_id))
+                    .get_result::<UserMember>(c);
+                match user_member {
+                    Ok(user_member) => {
+                        let delete_num =
+                            diesel::delete(members::table.find(user_member.member_id)).execute(c);
+                        if let Ok(delete_num) = delete_num {
+                            diesel::delete(
+                                user_member::table
+                                    .find((user_member.user_id, user_member.member_id)),
+                            )
+                            .execute(c)?;
+                            Ok::<usize, ApiError>(delete_num)
+                        } else {
+                            Ok(delete_num?)
+                        }
+                    }
+                    Err(_) => Ok(0),
+                }
+            })
             .await?;
         Ok(result)
     }
