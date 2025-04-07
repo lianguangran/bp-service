@@ -45,9 +45,7 @@ pub struct NewUser {
 impl Users {
     pub async fn detail(conn: &BpRecordConn, id: Uuid) -> Result<Users, ApiError> {
         let user = conn
-            .run(move |c|
-                users::table.find(id).get_result::<Users>(c)
-            )
+            .run(move |c| users::table.find(id).get_result::<Users>(c))
             .await?;
         Ok(user)
     }
@@ -65,9 +63,7 @@ impl Users {
                 user_query = user_query.filter(users::session_key.eq(session_key));
             }
         }
-        let users_list = conn
-            .run(|c| user_query.get_results::<Users>(c))
-            .await?;
+        let users_list = conn.run(|c| user_query.get_results::<Users>(c)).await?;
         Ok(users_list)
     }
 
@@ -76,7 +72,6 @@ impl Users {
             .run(move |c| {
                 diesel::insert_into(users::table)
                     .values(new_user)
-                    .returning(Users::as_returning())
                     .get_result::<Users>(c)
             })
             .await?;
@@ -96,7 +91,6 @@ impl Users {
                         users::session_key.eq(new_user.session_key),
                         users::updated_at.eq(diesel::dsl::now),
                     ))
-                    .returning(Users::as_returning())
                     .get_result::<Users>(c)
             })
             .await?;

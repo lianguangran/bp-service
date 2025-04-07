@@ -1,9 +1,9 @@
+use crate::db::record::Records;
 use crate::db::user::Users;
 use crate::db::BpRecordConn;
 use crate::error::api::ApiError;
-use crate::schema::{members, user_member};
+use crate::schema::{members, records, user_member};
 use crate::util::serde_time_format;
-use anyhow::Error;
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use diesel::{Queryable, Selectable};
@@ -112,21 +112,14 @@ impl Members {
                             members::name.eq(new_member.name),
                             members::memo.eq(new_member.memo),
                         ))
-                        .get_result::<Members>(x)
-                        .map_err(|e| ApiError::Internal(Error::from(e)));
-                    match member {
-                        Ok(member) => {
-                            diesel::insert_into(user_member::table)
-                                .values((
-                                    user_member::user_id.eq(user_id),
-                                    user_member::member_id.eq(member.id),
-                                ))
-                                .get_result::<UserMember>(x)
-                                .unwrap();
-                            Ok(member)
-                        }
-                        Err(e) => Err(e),
-                    }
+                        .get_result::<Members>(x)?;
+                    diesel::insert_into(user_member::table)
+                        .values((
+                            user_member::user_id.eq(user_id),
+                            user_member::member_id.eq(member.id),
+                        ))
+                        .get_result::<UserMember>(x)?;
+                    Ok::<Members, ApiError>(member)
                 })
             })
             .await?;
@@ -159,26 +152,25 @@ impl Members {
     ) -> Result<usize, ApiError> {
         let result = conn
             .run(move |c| {
-                let user_member = user_member::table
-                    .find((user_id, member_id))
-                    .get_result::<UserMember>(c);
-                match user_member {
-                    Ok(user_member) => {
-                        let delete_num =
-                            diesel::delete(members::table.find(user_member.member_id)).execute(c);
-                        if let Ok(delete_num) = delete_num {
-                            diesel::delete(
-                                user_member::table
-                                    .find((user_member.user_id, user_member.member_id)),
-                            )
-                            .execute(c)?;
-                            Ok::<usize, ApiError>(delete_num)
-                        } else {
-                            Ok(delete_num?)
-                        }
+                c.transaction(|x| {
+                    let record_list = records::table
+                        .filter(records::member_id.eq(member_id))
+                        .get_results::<Records>(x);
+                    if record_list.is_ok() {
+                        diesel::delete(records::table.filter(records::member_id.eq(member_id)))
+                            .execute(x)?;
                     }
-                    Err(_) => Ok(0),
-                }
+                    let user_member = user_member::table
+                        .find((user_id, member_id))
+                        .get_result::<UserMember>(x);
+                    if let Ok(user_member) = user_member {
+                        diesel::delete(
+                            user_member::table.find((user_member.user_id, user_member.member_id)),
+                        )
+                        .execute(x)?;
+                    }
+                    diesel::delete(members::table.find(member_id)).execute(x)
+                })
             })
             .await?;
         Ok(result)
@@ -195,6 +187,7 @@ impl UserMember {
                 members::table
                     .inner_join(user_member::table)
                     .filter(user_member::user_id.eq(user_id))
+                    .order(members::updated_at.desc())
                     .select(Members::as_select())
                     .get_results::<Members>(c)
             })

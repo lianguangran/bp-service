@@ -1,3 +1,4 @@
+use crate::db::member::Members;
 use crate::db::BpRecordConn;
 use crate::error::api::ApiError;
 use crate::schema::{members, records};
@@ -47,8 +48,9 @@ impl Records {
                 records::table
                     .inner_join(members::table)
                     .filter(members::id.eq(member_id))
+                    .order((records::record_at.desc(), records::updated_at.desc()))
                     .select(Records::as_select())
-                    .load::<Records>(c)
+                    .get_results::<Records>(c)
             })
             .await?;
         Ok(record_list)
@@ -56,12 +58,7 @@ impl Records {
 
     pub async fn detail(conn: &BpRecordConn, record_id: Uuid) -> Result<Records, ApiError> {
         let record = conn
-            .run(move |c| {
-                records::table
-                    .find(record_id)
-                    .select(Records::as_select())
-                    .get_result::<Records>(c)
-            })
+            .run(move |c| records::table.find(record_id).get_result::<Records>(c))
             .await?;
         Ok(record)
     }
@@ -73,16 +70,23 @@ impl Records {
     ) -> Result<Records, ApiError> {
         let record = conn
             .run(move |c| {
-                diesel::insert_into(records::table)
-                    .values((
-                        records::member_id.eq(member_id),
-                        records::systolic.eq(new_record.systolic),
-                        records::diastolic.eq(new_record.diastolic),
-                        records::bmp.eq(new_record.bmp),
-                        records::record_at.eq(new_record.record_at),
-                    ))
-                    .returning(Records::as_returning())
-                    .get_result(c)
+                c.transaction(|x| {
+                    let record = diesel::insert_into(records::table)
+                        .values((
+                            records::member_id.eq(member_id),
+                            records::systolic.eq(new_record.systolic),
+                            records::diastolic.eq(new_record.diastolic),
+                            records::bmp.eq(new_record.bmp),
+                            records::record_at.eq(new_record.record_at),
+                        ))
+                        .get_result::<Records>(x);
+                    if record.is_ok() {
+                        diesel::update(members::table.find(member_id))
+                            .set(members::updated_at.eq(diesel::dsl::now))
+                            .get_result::<Members>(x)?;
+                    }
+                    record
+                })
             })
             .await?;
         Ok(record)
@@ -96,17 +100,24 @@ impl Records {
     ) -> Result<Records, ApiError> {
         let record = conn
             .run(move |c| {
-                diesel::update(records::table.find(record_id))
-                    .set((
-                        records::member_id.eq(member_id),
-                        records::systolic.eq(new_record.systolic),
-                        records::diastolic.eq(new_record.diastolic),
-                        records::bmp.eq(new_record.bmp),
-                        records::record_at.eq(new_record.record_at),
-                        records::updated_at.eq(diesel::dsl::now),
-                    ))
-                    .returning(Records::as_returning())
-                    .get_result(c)
+                c.transaction(|x| {
+                    let record = diesel::update(records::table.find(record_id))
+                        .set((
+                            records::member_id.eq(member_id),
+                            records::systolic.eq(new_record.systolic),
+                            records::diastolic.eq(new_record.diastolic),
+                            records::bmp.eq(new_record.bmp),
+                            records::record_at.eq(new_record.record_at),
+                            records::updated_at.eq(diesel::dsl::now),
+                        ))
+                        .get_result::<Records>(x);
+                    if record.is_ok() {
+                        diesel::update(members::table.find(member_id))
+                            .set(members::updated_at.eq(diesel::dsl::now))
+                            .get_result::<Members>(x)?;
+                    }
+                    record
+                })
             })
             .await?;
         Ok(record)
@@ -114,7 +125,17 @@ impl Records {
 
     pub async fn delete(conn: &BpRecordConn, record_id: Uuid) -> Result<usize, ApiError> {
         let num = conn
-            .run(move |c| diesel::delete(records::table.find(record_id)).execute(c))
+            .run(move |c| {
+                c.transaction(|x| {
+                    let record = records::table.find(record_id).get_result::<Records>(x);
+                    if let Ok(record) = record {
+                        diesel::update(members::table.find(record.member_id))
+                            .set(members::updated_at.eq(diesel::dsl::now))
+                            .get_result::<Members>(x)?;
+                    }
+                    diesel::delete(records::table.find(record_id)).execute(x)
+                })
+            })
             .await?;
         Ok(num)
     }
