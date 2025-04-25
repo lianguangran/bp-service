@@ -1,13 +1,24 @@
-use crate::db::member::Members;
 use crate::db::BpRecordConn;
+use crate::db::member::Members;
 use crate::error::api::ApiError;
 use crate::schema::{members, records};
 use crate::util::serde_time_format;
-use chrono::NaiveDateTime;
+use chrono::{Months, NaiveDateTime, Utc};
 use diesel::prelude::*;
 use diesel::{Queryable, Selectable};
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::env;
 use uuid::Uuid;
+
+lazy_static! {
+    pub static ref RECORD_MONTH: u32 = {
+        env::var("RECORD_MONTH")
+            .unwrap_or_else(|_| "2".to_owned())
+            .parse::<u32>()
+            .unwrap()
+    };
+}
 
 #[derive(Debug, Serialize, Identifiable, Queryable, Selectable)]
 #[diesel(
@@ -45,9 +56,14 @@ impl Records {
     ) -> Result<Vec<Records>, ApiError> {
         let record_list = conn
             .run(move |c| {
+                let record_months_ago = Utc::now()
+                    .checked_sub_months(Months::new(*RECORD_MONTH))
+                    .unwrap()
+                    .naive_utc();
                 records::table
                     .inner_join(members::table)
                     .filter(members::id.eq(member_id))
+                    .filter(records::record_at.ge(record_months_ago))
                     .order((records::record_at.desc(), records::updated_at.desc()))
                     .select(Records::as_select())
                     .get_results::<Records>(c)

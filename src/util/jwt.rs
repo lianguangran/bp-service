@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 lazy_static! {
-    pub static ref JWT_SECRET: u64 = {
+    pub static ref JWT_EXPIRE: u64 = {
         env::var("JWT_EXPIRE")
-            .unwrap_or_else(|_| "64".to_owned())
+            .unwrap_or_else(|_| "3600".to_owned())
             .parse::<u64>()
             .unwrap()
     };
@@ -45,7 +45,7 @@ pub struct Claims {
 
 impl Claims {
     pub fn new(sub: String) -> Self {
-        let exp = SystemTime::now() + Duration::from_secs(*JWT_SECRET);
+        let exp = SystemTime::now() + Duration::from_secs(*JWT_EXPIRE);
         let exp = exp.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         Claims { sub, exp }
     }

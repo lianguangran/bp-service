@@ -1,15 +1,26 @@
+use crate::db::BpRecordConn;
 use crate::db::record::Records;
 use crate::db::user::Users;
-use crate::db::BpRecordConn;
 use crate::error::api::ApiError;
 use crate::schema::{members, records, user_member};
 use crate::util::serde_time_format;
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use diesel::{Queryable, Selectable};
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::result::Result::Ok;
 use uuid::Uuid;
+
+lazy_static! {
+    pub static ref MEMBER_NUM: i64 = {
+        env::var("MEMBER_NUM")
+            .unwrap_or_else(|_| "2".to_owned())
+            .parse::<i64>()
+            .unwrap()
+    };
+}
 
 #[derive(Debug, Serialize, Identifiable, Queryable, Selectable, Associations)]
 #[diesel(
@@ -107,6 +118,13 @@ impl Members {
         let member = conn
             .run(move |c| {
                 c.transaction(|x| {
+                    let member_num: i64 = user_member::table
+                        .filter(user_member::user_id.eq(user_id))
+                        .count()
+                        .get_result(x)?;
+                    if member_num >= *MEMBER_NUM {
+                        return Err(ApiError::BadRequest(String::from("最多添加2名成员")));
+                    }
                     let member = diesel::insert_into(members::table)
                         .values((
                             members::name.eq(new_member.name),
